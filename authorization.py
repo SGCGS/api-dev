@@ -1,16 +1,14 @@
 import requests
 import re
-import utility
 import random
-import json
+from config import config
 import time
 import _thread
 import sqlite3
 import threading
 from contextlib import contextmanager
-from fastapi.responses import PlainTextResponse, HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import PlainTextResponse, JSONResponse
 from fastapi import HTTPException
-import utility
 
 
 _local = threading.local()
@@ -50,22 +48,35 @@ class authorization:
             USERNAME TEXT,
             CTIME NUMBER);''')
         self.conn.commit()
-        self.cur.execute('''CREATE TABLE IF NOT EXISTS MANAGEBACTOKENS
-           (TOKEN TEXT,
-            MANAGEBACID NUMBER,
-            CTIME NUMBER);''')
         self.conn.commit()
         _thread.start_new_thread(self.expire, ())
         self.Lock = threading.Lock()
 
-    def reCaptcha(self, token):
+    def setCookie(self, username):
+        cookie = ''.join(random.sample(
+            "abcdefghijklmnopqrstuvwxyz1234567890!@#$%^&*()_+{}|-=[]\\:\";',./<>?", 50))
+        with acquire(self.Lock):
+            self.cur.execute("INSERT INTO SESSIONS VALUES(?, ?, ?)",
+                             (cookie, username, int(time.time()), ))
+            self.conn.commit()
+        return cookie
+
+    def manageBacT2U(self, token):
+        with acquire(self.Lock):
+            self.cur.execute(
+                "SELECT * FROM MANAGEBACTOKENS WHERE TOKEN = ?", (token,))
+            r = self.cur.fetchall()
+        return r
+
+    def reCaptcha(self, token): # To Do v3
+        rcfg = config("./reCaptcha.json")
         payload = {
-            "secret": utility.rsks,
+            "secret": rcfg["secret"],
             "response": token
         }
         r = requests.post(
             "https://recaptcha.net/recaptcha/api/siteverify", data=payload).json()
-        if r["success"]:
+        if r["success"] and r["score"] > rcfg["threshold"]:
             return True
         else:
             return False
@@ -78,9 +89,6 @@ class authorization:
         while True:
             self.conn.execute(
                 "DELETE FROM SESSIONS WHERE CTIME < ?", (int(time.time()) - self.interval,))
-            self.conn.commit()
-            self.conn.execute(
-                "DELETE FROM MANAGEBACTOKENS WHERE CTIME < ?", (int(time.time()) - 300,))
             self.conn.commit()
             time.sleep(60)
 
@@ -100,66 +108,11 @@ class authorization:
         else:
             return 0
 
-    def signUp(self, username, password, token, rt):
+    def login_managebac(self, username, password, rt):
         if not self.reCaptcha(rt):
             raise HTTPException(status_code=401, detail="Robots go away")
 
-        with acquire(self.Lock):
-            self.cur.execute(
-                "SELECT * FROM MANAGEBACTOKENS WHERE TOKEN = ?", (token,))
-            r = self.cur.fetchall()
-        if r:
-            with acquire(self.Lock):
-                self.cur.execute(
-                    "SELECT * FROM ACCOUNTS WHERE USERNAME = ?", (username,))
-                s = self.cur.fetchall()
-            if not s:
-                with acquire(self.Lock):
-                    self.cur.execute(
-                        "DELETE FROM MANAGEBACTOKENS WHERE TOKEN = ?", (token,))
-                    self.conn.commit()
-                    self.cur.execute(
-                        "INSERT INTO ACCOUNTS VALUES(?, ?, ?, ?)", (username, password, 1, r[0][1],))
-                    self.conn.commit()
-                cookie = ''.join(random.sample(
-                    "abcdefghijklmnopqrstuvwxyz1234567890!@#$%^&*()_+{}|-=[]\\:\";',./<>?", 50))
-                with acquire(self.Lock):
-                    self.cur.execute("INSERT INTO SESSIONS VALUES(?, ?, ?)",
-                                     (cookie, username, int(time.time()), ))
-                    self.conn.commit()
-                r = PlainTextResponse()
-                r.set_cookie("auth", cookie, self.interval, self.interval)
-                return r
-            else:
-                raise HTTPException(
-                    status_code=403, detail="Username already exists")
-        else:
-            raise HTTPException(
-                status_code=401, detail="Invalid or expired token")
-
-    def logIn(self, username, password, rt):
-        if not self.reCaptcha(rt):
-            raise HTTPException(status_code=401, detail="Robots go away")
-
-        if self.getPermission(username, password):
-            cookie = ''.join(random.sample(
-                "abcdefghijklmnopqrstuvwxyz1234567890!@#$%^&*()_+{}|-=[]\\:\";',./<>?", 50))
-            with acquire(self.Lock):
-                self.cur.execute("INSERT INTO SESSIONS VALUES(?, ?, ?)",
-                                 (cookie, username, int(time.time()), ))
-                self.conn.commit()
-            r = PlainTextResponse()
-            r.set_cookie("auth", cookie, self.interval, self.interval)
-            return r
-        else:
-            raise HTTPException(
-                status_code=401, detail="Wrong password or username does not exist")
-
-    def managebac(self, username, password, rt):
-        if not self.reCaptcha(rt):
-            raise HTTPException(status_code=401, detail="Robots go away")
-
-        ua = utility.ua
+        ua = {'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/65.0.3325.181 Safari/537.36'}
         session = requests.Session()
         text = session.get("https://bgy.managebac.cn/login", headers=ua).text
         tmp = re.search(
@@ -176,14 +129,8 @@ class authorization:
         r = session.post("https://bgy.managebac.cn/sessions",
                          data=payload, headers=ua)
         reditList = r.history
-        cookie = session.cookies
         if reditList and reditList[len(reditList)-1].headers["location"] == "https://bgy.managebac.cn/student/home":
-            token = self.randomToken()
-            with acquire(self.Lock):
-                self.cur.execute("INSERT INTO MANAGEBACTOKENS VALUES(?, ?, ?)",
-                                 (token, cookie.get_dict()["user_id"], int(time.time()), ))
-                self.conn.commit()
-            return token
+            return {"token": self.setCookie(username)}
         else:
             raise HTTPException(
                 status_code=401, detail="Wrong password or username does not exist")

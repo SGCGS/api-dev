@@ -1,26 +1,40 @@
 from fastapi import FastAPI
-from fastapi.responses import PlainTextResponse, HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import PlainTextResponse, HTMLResponse, RedirectResponse, StreamingResponse, JSONResponse
 from fastapi import FastAPI, Cookie, HTTPException
-import utility
 from authorization import authorization
+from typing import Union
+from fastapi import FastAPI
+from pydantic import BaseModel
+from fastapi.middleware.cors import CORSMiddleware
+
+
 app = FastAPI()
 
-# auth: Optional[str] = Cookie(None)
+
+origins = [
+    "http://localhost",
+    "http://localhost:8080",
+]
+
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+class LoginForm(BaseModel):
+    username: str
+    password: str
+    rt: str
+
 
 auth = authorization()
 
-@app.get("/managebac", response_class=PlainTextResponse)
-async def managebac(username: str, password: str, rt: str):
-    return auth.managebac(username, password, rt)
 
-@app.get("/rsk", response_class=PlainTextResponse)
-async def rsk():
-    return utility.rsk
-    
-@app.get("/login", response_class=PlainTextResponse)
-async def login(username: str, password: str, rt: str):
-    return auth.logIn(username, password, rt)
-
-@app.get("/signup", response_class=PlainTextResponse)
-async def signup(username: str, password: str, managebactoken: str, rt: str):
-    return auth.signUp(username, password, managebactoken, rt)
+@app.post("/login/managebac", response_class=JSONResponse)
+async def login_managebac(form: LoginForm):
+    return auth.login_managebac(form.username, form.password, form.rt)

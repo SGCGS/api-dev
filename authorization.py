@@ -33,7 +33,7 @@ def acquire(*locks):
 
 
 class authorization:
-    def __init__(self, dbp="./user.db", interval=900):
+    def __init__(self, dbp="./authorization.db", interval=900):
         self.interval = interval
         self.conn = sqlite3.connect(dbp, check_same_thread=False, timeout=5)
         self.cur = self.conn.cursor()
@@ -42,12 +42,14 @@ class authorization:
             PASSWORD TEXT,
             PERMISSION NUMBER,
             MANAGEBACID NUMBER);''')
-        self.conn.commit()
+        self.cur.execute('''CREATE TABLE IF NOT EXISTS MANAGEBACCACHE
+           (USERNAME TEXT,
+            PASSWORD TEXT,
+            CTIME NUMBER);''')
         self.cur.execute('''CREATE TABLE IF NOT EXISTS SESSIONS
            (COOKIE TEXT,
             USERNAME TEXT,
             CTIME NUMBER);''')
-        self.conn.commit()
         self.conn.commit()
         _thread.start_new_thread(self.expire, ())
         self.Lock = threading.Lock()
@@ -68,8 +70,10 @@ class authorization:
             r = self.cur.fetchall()
         return r
 
-    def reCaptcha(self, token): # To Do v3
+    def reCaptcha(self, token):  # To Do v3
         rcfg = config("./reCaptcha.json")
+        if rcfg["no_authorization"]:
+            return True
         payload = {
             "secret": rcfg["secret"],
             "response": token
@@ -89,6 +93,8 @@ class authorization:
         while True:
             self.conn.execute(
                 "DELETE FROM SESSIONS WHERE CTIME < ?", (int(time.time()) - self.interval,))
+            self.conn.execute(
+                "DELETE FROM MANAGEBACCACHE WHERE CTIME < ?", (int(time.time()) - 7777777,))
             self.conn.commit()
             time.sleep(60)
 
@@ -111,8 +117,17 @@ class authorization:
     def login_managebac(self, username, password, rt):
         if not self.reCaptcha(rt):
             raise HTTPException(status_code=401, detail="Robots go away")
-
-        ua = {'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/65.0.3325.181 Safari/537.36'}
+        # Query in cache
+        with acquire(self.Lock):
+            self.cur.execute(
+                "SELECT * FROM MANAGEBACCACHE WHERE USERNAME = ? AND PASSWORD = ?", (username, password,))
+            r = self.cur.fetchall()
+        if r:
+            return {"token": self.setCookie(username)}
+        # Try to log in
+        ua = {
+            'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/65.0.3325.181 Safari/537.36'
+        }
         session = requests.Session()
         text = session.get("https://bgy.managebac.cn/login", headers=ua).text
         tmp = re.search(
@@ -130,7 +145,11 @@ class authorization:
                          data=payload, headers=ua)
         reditList = r.history
         if reditList and reditList[len(reditList)-1].headers["location"] == "https://bgy.managebac.cn/student/home":
+            with acquire(self.Lock):
+                self.cur.execute("INSERT INTO MANAGEBACCACHE VALUES(?, ?, ?)",
+                                 (username, password, int(time.time()), ))
+                self.conn.commit()
             return {"token": self.setCookie(username)}
-        else:
-            raise HTTPException(
-                status_code=401, detail="Wrong password or username does not exist")
+        # All login attempts failed
+        raise HTTPException(
+            status_code=401, detail="Wrong password or username does not exist")

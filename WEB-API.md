@@ -1,7 +1,7 @@
 # 接口
-|正式 API 服务器域名|测试服务器 API 域名|
-|---|---|
-|无|`api.scgcs.atunemic.com`|
+|API 服务器域名|
+|---|
+|`api.sgcgs.com`|
 
 # 鉴权
 |权限等级|身份|

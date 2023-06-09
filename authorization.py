@@ -1,4 +1,3 @@
-import requests
 import re
 import random
 from config import config
@@ -7,8 +6,12 @@ import _thread
 import sqlite3
 import threading
 from contextlib import contextmanager
-from fastapi.responses import PlainTextResponse, JSONResponse
 from fastapi import HTTPException
+from dependency import setup
+
+
+with setup("requests"):
+    import requests
 
 
 _local = threading.local()
